@@ -3,7 +3,7 @@ import argparse
 import pandas as pd
 import os
 import csv
-
+import re
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -20,6 +20,8 @@ def filter_notes(notes_df: pd.DataFrame, admissions_df: pd.DataFrame, admission_
     Keep only Discharge Summaries and filter out Newborn admissions. Replace duplicates and join reports with
     their addendums. If admission_text_only is True, filter all sections that are not known at admission time.
     """
+
+
     # filter out newborns
     adm_grownups = admissions_df[admissions_df.ADMISSION_TYPE != "NEWBORN"]
     notes_df = notes_df[notes_df.HADM_ID.isin(adm_grownups.HADM_ID)]
@@ -54,34 +56,42 @@ def filter_notes(notes_df: pd.DataFrame, admissions_df: pd.DataFrame, admission_
     return notes_df
 
 
-def filter_admission_text(notes_df) -> pd.DataFrame:
+def extract_sections(text):
     """
     Filter text information by section and only keep sections that are known on admission time.
     """
-    admission_sections = {
-        "CHIEF_COMPLAINT": "chief complaint:",
-        "PRESENT_ILLNESS": "present illness:",
-        "MEDICAL_HISTORY": "medical history:",
-        "MEDICATION_ADM": "medications on admission:",
-        "ALLERGIES": "allergies:",
-        "PHYSICAL_EXAM": "physical exam:",
-        "FAMILY_HISTORY": "family history:",
-        "SOCIAL_HISTORY": "social history:"
+    sections = {
+        "CHIEF_COMPLAINT": r"chief complaint:\s*([\s\S]*?)(?:\n\n|\Z)",
+        "PRESENT_ILLNESS": r"present illness:\s*([\s\S]*?)(?:\n\n|\Z)",
+        "MEDICAL_HISTORY": r"medical history:\s*([\s\S]*?)(?:\n\n|\Z)",
+        "MEDICATION_ADM": r"medications on admission:\s*([\s\S]*?)(?:\n\n|\Z)",
+        "ALLERGIES": r"allergies:\s*([\s\S]*?)(?:\n\n|\Z)",
+        "PHYSICAL_EXAM": r"physical exam:\s*([\s\S]*?)(?:\n\n|\Z)",
+        "FAMILY_HISTORY": r"family history:\s*([\s\S]*?)(?:\n\n|\Z)",
+        "SOCIAL_HISTORY": r"social history:\s*([\s\S]*?)(?:\n\n|\Z)"
     }
+    
+    extracted = {}
+    for key, pattern in sections.items():
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if match:
+            extracted[key] = match.group(1).strip()
+        else:
+            extracted[key] = ""
+    
+    
+    return extracted
 
-    # replace linebreak indicators
-    notes_df['TEXT'] = notes_df['TEXT'].str.replace(r"\n", r"\\n")
 
-    # extract each section by regex
-    for key in admission_sections.keys():
-        section = admission_sections[key]
-        notes_df[key] = notes_df.TEXT.str.extract(r'(?i){}(.+?)\\n\\n[^(\\|\d|\.)]+?:'
-                                                  .format(section))
+def filter_admission_text(notes_df) -> pd.DataFrame:
 
-        notes_df[key] = notes_df[key].str.replace(r'\\n', r' ')
-        notes_df[key] = notes_df[key].str.strip()
-        notes_df[key] = notes_df[key].fillna("")
-        notes_df[notes_df[key].str.startswith("[]")][key] = ""
+    
+    # apply the extract_sections funtions to each of the rows 
+    notes_df['extracted'] = notes_df['TEXT'].apply(extract_sections)
+    
+    # expand the dictionary into separate columns
+    notes_df = pd.concat([notes_df, notes_df['extracted'].apply(pd.Series)], axis=1)
+
 
     # filter notes with missing main information
     notes_df = notes_df[(notes_df.CHIEF_COMPLAINT != "") | (notes_df.PRESENT_ILLNESS != "") |
